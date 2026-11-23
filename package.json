@@ -1,6 +1,6 @@
 {
   "name": "permission-system",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Pi data-ops permission gate and automatic review with a session-only manual mode",
   "keywords": ["pi-package", "pi-extension", "permissions"],
   "type": "module",
