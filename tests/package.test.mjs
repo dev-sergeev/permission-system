@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,7 +8,7 @@ import { createReviewerProvider } from './reviewer-provider.mjs';
 
 // Exercise Pi's actual resource loader, command dispatcher, tool_call hooks and TUI dialog.
 // Only provider responses and terminal keypresses are supplied by the test; no tools execute.
-test('data-ops policy and session-only manual review in a clean project', { timeout: 30000 }, async t => {
+test('data-ops policy, session review mode and trusted project YOLO', { timeout: 30000 }, async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'permission-system-test-')));
   const sessions = [];
   t.after(async () => {
@@ -30,8 +30,9 @@ test('data-ops policy and session-only manual review in a clean project', { time
   const secondFixture = createReviewerProvider({ provider: 'offline-two' });
   const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
   const entry = process.env.PERMISSION_SYSTEM_TEST_ENTRY ?? fileURLToPath(new URL('../index.mjs', import.meta.url));
-  const start = async () => {
-    const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager,
+  const start = async (project = cwd, projectTrusted = true) => {
+    const settings = project === cwd && projectTrusted ? settingsManager : SettingsManager.inMemory({}, { projectTrusted });
+    const resourceLoader = new DefaultResourceLoader({ cwd: project, agentDir, settingsManager: settings,
       noExtensions: true, noSkills: true, noContextFiles: true, noPromptTemplates: true, noThemes: true,
       additionalExtensionPaths: [entry], extensionFactories: [pi => {
         pi.registerProvider(fixture.provider);
@@ -39,8 +40,8 @@ test('data-ops policy and session-only manual review in a clean project', { time
       }],
     });
     await resourceLoader.reload();
-    const { session, extensionsResult } = await createAgentSession({ cwd, agentDir, settingsManager, resourceLoader,
-      sessionManager: SessionManager.inMemory(cwd) });
+    const { session, extensionsResult } = await createAgentSession({ cwd: project, agentDir, settingsManager: settings, resourceLoader,
+      sessionManager: SessionManager.inMemory(project) });
     sessions.push(session);
     assert.deepEqual(extensionsResult.errors, []);
     return session;
@@ -50,18 +51,29 @@ test('data-ops policy and session-only manual review in a clean project', { time
   const theme = session.extensionRunner.createCommandContext().ui.theme;
   const dialogs = [];
   const notifications = [];
+  let permissionStatus;
   let answer = 'n';
   const ui = {
-    theme, setStatus() {}, notify(message) { notifications.push(message); }, getToolsExpanded: () => false,
-    custom: factory => new Promise((resolve, reject) => {
+    theme, notify(message) { notifications.push(message); }, getToolsExpanded: () => false,
+    setStatus(key, value) {
+      if (key === 'pi-permission-system') permissionStatus = value;
+    },
+    custom: (factory, options) => new Promise((resolve, reject) => {
       const dialog = factory({ requestRender() {} }, theme, { matches: () => false }, resolve);
+      if (options?.overlay && typeof dialog.updateValue === 'function') {
+        dialog.handleInput(' ');
+        dialog.handleInput('\x1b');
+        reject(new Error('Settings overlay did not close'));
+        return;
+      }
       dialogs.push(dialog.render(180).join('\n'));
       dialog.handleInput(answer);
       dialog.handleInput(answer); // Also handles double-press confirmation when enabled.
       reject(new Error(`Dialog did not accept ${answer}`));
     }),
   };
-  await session.bindExtensions({ mode: 'tui', uiContext: ui });
+  const bindTui = target => target.bindExtensions({ mode: 'tui', uiContext: ui });
+  await bindTui(session);
   const selectModel = async (target, provider, id) => {
     const model = target.extensionRunner.getModelRegistry().find(provider, id);
     assert.ok(model, `registered model ${provider}/${id}`);
@@ -69,9 +81,10 @@ test('data-ops policy and session-only manual review in a clean project', { time
   };
   await selectModel(session, 'offline-one', 'model-one');
   let id = 0;
-  const call = (toolName, input) => session.extensionRunner.emitToolCall({ type: 'tool_call', toolName, input, toolCallId: `call-${++id}` });
-  const bash = command => call('bash', { command });
-  const write = path => call('write', { path, content: 'test' });
+  const call = (target, toolName, input) => target.extensionRunner.emitToolCall({ type: 'tool_call', toolName, input, toolCallId: `call-${++id}` });
+  const bash = command => call(session, 'bash', { command });
+  const writeTo = (target, path) => call(target, 'write', { path, content: 'test' });
+  const write = path => writeTo(session, path);
 
   for (const command of ['hadoop fs -rm /data', 'hdfs dfs -ls / | hadoop fs -rm /data']) {
     const result = await bash(command);
@@ -98,7 +111,7 @@ test('data-ops policy and session-only manual review in a clean project', { time
   const outside = join(root, 'outside.txt');
   await writeFile(outside, 'external');
   await symlink(outside, join(cwd, 'alias'));
-  assert.equal((await call('read', { path: 'alias' }))?.block, true);
+  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, true);
   assert.match(dialogs.at(-1), /outside\.txt/);
   assert.equal((await write('alias'))?.block, true, 'model approval cannot replace external write consent');
 
@@ -180,4 +193,109 @@ test('data-ops policy and session-only manual review in a clean project', { time
   assert.equal(missingProvider?.block, true, 'without a reviewer or operator a project write fails closed');
   assert.equal(fixture.state.callCount + secondFixture.state.callCount, beforeUnavailable,
     'an unavailable override does not silently use the session model');
+
+  const gateConfigDir = join(agentDir, 'extensions/pi-permission-system');
+  const projectGateConfigDir = join(cwd, '.pi/extensions/pi-permission-system');
+  const globalGateConfig = join(gateConfigDir, 'config.json');
+  const projectGateConfig = join(projectGateConfigDir, 'config.json');
+  const globalJson = '{"yoloMode":true}';
+  const projectJson = '{"yoloMode":false,"permission":{"write":"ask"}}';
+  await mkdir(gateConfigDir, { recursive: true });
+  await mkdir(projectGateConfigDir, { recursive: true });
+  await writeFile(globalGateConfig, globalJson);
+  await writeFile(projectGateConfig, projectJson);
+  await rm(join(reviewerConfig, 'config.json'));
+  await session.reload();
+  await selectModel(session, 'offline-one', 'model-one');
+  fixture.setVerdict('deny');
+  answer = 'n';
+
+  const show = async target => {
+    await target.prompt('/permission-system show');
+    return notifications.at(-1).match(/\byoloMode=(on|off)\b/)?.[1];
+  };
+  const refresh = target => target.extensionRunner.emitBeforeAgentStart(
+    { messageType: 'user', prompt: 'YOLO config refresh', images: [] },
+    target.extensionRunner.createCommandContext().getSystemPromptOptions(),
+  );
+  const reviews = () => fixture.state.callCount + secondFixture.state.callCount;
+  const dialogCount = dialogs.length;
+  const beforeYolo = reviews();
+  const beforeYoloOnReviewer = fixture.state.callCount;
+  assert.equal(await show(session), 'off', 'legacy JSON opt-in must be ignored');
+  assert.equal((await write('report.txt'))?.block, true);
+  assert.equal(fixture.state.callCount, beforeYoloOnReviewer + 1);
+  assert.equal(reviews(), beforeYolo + 1);
+
+  await session.prompt('/permission-system');
+  assert.equal(await show(session), 'on');
+  assert.match(permissionStatus, /\byolo\b/);
+  await refresh(session);
+  assert.equal(await show(session), 'on', 'the next turn must retain the operator opt-in');
+  assert.match(permissionStatus, /\byolo\b/);
+  assert.equal((await write('report.txt'))?.block, undefined);
+  assert.equal(reviews(), beforeYolo + 1);
+  assert.equal(dialogs.length, dialogCount);
+  assert.equal(await readFile(globalGateConfig, 'utf8'), globalJson);
+  assert.equal(await readFile(projectGateConfig, 'utf8'), projectJson);
+
+  assert.equal((await bash('python report.py'))?.block, undefined);
+  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, undefined);
+  assert.equal((await write('.pi/settings.json'))?.block, true);
+  assert.equal((await bash('hadoop fs -rm /data'))?.block, true);
+  assert.equal(reviews(), beforeYolo + 1);
+  assert.equal(dialogs.length, dialogCount);
+  await session.reload();
+  assert.equal(await show(session), 'on');
+  assert.equal((await write('report.txt'))?.block, undefined);
+  const reopened = await start();
+  await bindTui(reopened);
+  await selectModel(reopened, 'offline-one', 'model-one');
+  assert.equal(await show(reopened), 'on');
+  assert.equal((await writeTo(reopened, 'report.txt'))?.block, undefined);
+  assert.equal(reviews(), beforeYolo + 1);
+  assert.equal(dialogs.length, dialogCount);
+
+  const otherProject = join(root, 'other-project');
+  await mkdir(otherProject);
+  const other = await start(otherProject);
+  await bindTui(other);
+  assert.equal(await show(other), 'off');
+  const untrusted = await start(cwd, false);
+  await bindTui(untrusted);
+  assert.equal(await show(untrusted), 'off');
+  await untrusted.prompt('/permission-system');
+  assert.equal(notifications.at(-1), 'YOLO mode requires an interactive, trusted project.');
+  assert.equal(await show(untrusted), 'off');
+  await refresh(session);
+  assert.equal(await show(session), 'on');
+
+  await session.prompt('/permission-system');
+  await refresh(session);
+  assert.equal(await show(session), 'off');
+  await session.reload();
+  assert.equal(await show(session), 'off');
+  assert.equal((await write('report.txt'))?.block, true);
+  assert.equal(reviews(), beforeYolo + 2);
+  assert.equal(dialogs.length, dialogCount);
+  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, true);
+  assert.equal(dialogs.length, dialogCount + 1);
+  assert.match(dialogs.at(-1), /outside\.txt/);
+  assert.equal(reviews(), beforeYolo + 2);
+
+  await session.prompt('/permission-system');
+  assert.equal(await show(session), 'on');
+  await session.prompt('/permission-system reset');
+  await session.reload();
+  assert.equal(await show(session), 'off');
+
+  const markers = join(gateConfigDir, 'yolo-projects');
+  await rmdir(markers);
+  await writeFile(markers, '', { flag: 'wx' });
+  const statusBeforeFailure = permissionStatus;
+  await session.prompt('/permission-system');
+  assert.match(notifications.at(-1), /^Failed to save project YOLO setting: /);
+  assert.equal(permissionStatus, statusBeforeFailure);
+  await refresh(session);
+  assert.equal(await show(session), 'off');
 });

@@ -26,7 +26,96 @@ export default async function buildGate(outDir) {
   const patches = new Map([
     [join(src, "config/config-loader.ts"), [
       ["let merged: UnifiedPermissionConfig = {};", `let merged: UnifiedPermissionConfig = ${JSON.stringify(defaults)};`],
-      ["  return {\n    global: globalConfig,", "  merged.yoloMode = false;\n  merged.authorizerChain = [\"auto-review\"];\n\n  return {\n    global: globalConfig,"],
+      ["  return {\n    global: globalConfig,", "  // Only the trusted project marker can opt in; ignore legacy JSON values.\n  merged.yoloMode = false;\n  merged.authorizerChain = [\"auto-review\"];\n\n  return {\n    global: globalConfig,"],
+    ]],
+    [join(src, "config/config-store.ts"), [
+      ["import {\n  existsSync,\n  mkdirSync,", `import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  realpathSync,`],
+      ['import { dirname, normalize } from "node:path";', 'import { dirname, join, normalize } from "node:path";'],
+      ["  getGlobalConfigPath,\n", "  getGlobalConfigDir,\n  getGlobalConfigPath,\n"],
+      ["export interface CommandConfigStore extends ConfigReader {\n", `export interface CommandConfigStore extends ConfigReader {
+  setProjectYoloMode(enabled: boolean, ctx: ExtensionCommandContext): boolean;
+`],
+      ['import { syncPermissionSystemStatus } from "./status";', `import { syncPermissionSystemStatus } from "./status";
+
+function projectYoloMarkerPath(agentDir: string, cwd: string): string {
+  return join(getGlobalConfigDir(agentDir), "yolo-projects", createHash("sha256").update(realpathSync(cwd)).digest("hex"));
+}
+
+function hasProjectYoloMarker(path: string): boolean {
+  const marker = lstatSync(path, { throwIfNoEntry: false });
+  if (!marker) return false;
+  if (!marker.isFile() || marker.size !== 0) {
+    throw new Error(\`Invalid YOLO opt-in marker at '\${path}'\`);
+  }
+  return true;
+}`],
+      ["   * untrusted repository's runtime config (`yoloMode`, `permissionReviewLog`,", "   * untrusted repository's runtime config (`permissionReviewLog`,"],
+      ["    const runtimeConfig = normalizePermissionSystemConfig(mergeResult.merged);", `    if (cwd && projectTrusted === true) {
+      try {
+        mergeResult.merged.yoloMode = hasProjectYoloMarker(projectYoloMarkerPath(this.deps.agentDir, cwd));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        mergeResult.issues.push(\`Failed to read project YOLO setting: \${message}\`);
+      }
+    }
+    const runtimeConfig = normalizePermissionSystemConfig(mergeResult.merged);`],
+      ["  /**\n   * Save updated runtime knobs", `  setProjectYoloMode(enabled: boolean, ctx: ExtensionCommandContext): boolean {
+    if (!ctx.hasUI || !ctx.isProjectTrusted()) {
+      ctx.ui.notify("YOLO mode requires an interactive, trusted project.", "warning");
+      return false;
+    }
+
+    try {
+      const path = projectYoloMarkerPath(this.deps.agentDir, ctx.cwd);
+      const current = hasProjectYoloMarker(path);
+      if (enabled && !current) {
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        try {
+          writeFileSync(path, "", { flag: "wx", mode: 0o600 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !hasProjectYoloMarker(path)) throw error;
+        }
+      } else if (!enabled && current) {
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify("Failed to save project YOLO setting: " + message, "error");
+      return false;
+    }
+
+    this.config = { ...this.config, yoloMode: enabled };
+    syncPermissionSystemStatus(ctx, this.config);
+    return true;
+  }
+
+  /**
+   * Save updated runtime knobs`],
+      ["    const normalized = normalizePermissionSystemConfig(next);", "    const normalized = normalizePermissionSystemConfig({ ...next, yoloMode: this.config.yoloMode });"],
+      ["      permissionReviewLog: normalized.permissionReviewLog,\n      yoloMode: normalized.yoloMode,\n    };\n", "      permissionReviewLog: normalized.permissionReviewLog,\n    };\n"],
+    ]],
+    [join(src, "config/config-modal.ts"), [
+      ['"Auto-approve ask-state permission checks, including subagent approval forwarding"', '"Persistently auto-approve all asks in this trusted project, including external paths; skips auto-review. Explicit denies remain."'],
+      ['    case "yoloMode":\n      return { ...config, yoloMode: value === "on" };\n', ""],
+      ["          current = applySetting(current, id, newValue);\n          controller.config.save(current, ctx);", `          if (id === "yoloMode") {
+            controller.config.setProjectYoloMode(newValue === "on", ctx);
+          } else {
+            controller.config.save(applySetting(current, id, newValue), ctx);
+          }`],
+      ['  if (normalized === "reset") {\n', `  if (normalized === "reset") {
+    if (ctx.hasUI && ctx.isProjectTrusted() && !controller.config.setProjectYoloMode(false, ctx)) {
+      return true;
+    }
+`],
     ]],
     [join(src, "policy/permission-manager.ts"), [
       ["const { mergedPermission, origins } = mergeScopesWithOrigins([", `const { mergedPermission, origins } = mergeScopesWithOrigins([\n      ["global", { permission: ${JSON.stringify(defaults.permission)} }],`],
@@ -47,7 +136,6 @@ export default async function buildGate(outDir) {
     ]],
     [join(src, "index.ts"), [
       ["import type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";", "export { PERMISSIONS_READY_CHANNEL, getPermissionsService } from \"./service\";\nimport type { ExtensionAPI } from \"@earendil-works/pi-coding-agent\";"],
-      ["const isYoloEnabled = (): boolean => isYoloModeEnabled(configStore.current());", "const isYoloEnabled = (): boolean => false;"],
       ["getAuthorizerChain: () => configStore.current().authorizerChain ?? [],", "getAuthorizerChain: () => [\"auto-review\"],"],
     ]],
   ]);
