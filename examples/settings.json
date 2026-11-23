@@ -1,0 +1,7 @@
+{
+  "packages": [
+    "npm:@gotgenes/pi-permission-system@42.1.0",
+    "npm:@mzwing/pi-permission-auto-review@1.0.2",
+    "npm:@gotgenes/pi-subagents@25.0.5"
+  ]
+}
