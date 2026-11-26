@@ -107,7 +107,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
     assert.equal(result?.block, true, command);
     assert.match(result.reason, /hadoop fs/i);
   }
-  assert.equal((await write('.pi/settings.json'))?.block, true);
+  assert.equal((await write(projectConfig('pi-permission-system')))?.block, true);
   assert.equal(fixture.state.callCount, 0, 'explicit denies precede model review');
   assert.deepEqual(dialogs, []);
   answer = 'y'; // A bare Hadoop "/" can also refer to a local filesystem.
@@ -147,14 +147,14 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   assert.equal(fixture.state.callCount, draftReviews + 2, 'draft edit still requires model review');
   await rm(draft);
   await symlink(outside, draft);
-  assert.equal((await write(draft))?.block, true, 'a symlinked draft remains protected by the .pi deny');
-  assert.equal((await write(join(draftDir, 'notes.md')))?.block, true, 'other .pi files remain denied');
-  assert.equal(dialogs.length, draftDialogs);
+  assert.equal((await write(draft))?.block, true, 'a symlinked draft requires external write consent');
+  assert.equal((await write(join(draftDir, 'notes.md')))?.block, true, 'other external files require consent');
+  assert.equal(dialogs.length, draftDialogs + 2);
   assert.equal(await readFile(outside, 'utf8'), 'external');
   const decoyDir = join(root, 'decoy', 'pi-plan-mode', 'drafts', uuid);
   await mkdir(decoyDir, { recursive: true });
   assert.equal((await write(join(decoyDir, 'plan.md')))?.block, true, 'a matching external decoy requires consent');
-  assert.equal(dialogs.length, draftDialogs + 1);
+  assert.equal(dialogs.length, draftDialogs + 3);
   assert.match(dialogs.at(-1), /external_directory_write/);
 
   await session.prompt('/permission-auto-review off');
@@ -281,7 +281,8 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
 
   assert.equal((await bash('python report.py'))?.block, undefined);
   assert.equal((await call(session, 'read', { path: 'alias' }))?.block, undefined);
-  assert.equal((await write('.pi/settings.json'))?.block, true);
+  assert.equal((await write('.pi/settings.json'))?.block, undefined);
+  assert.equal((await write(projectReviewer))?.block, true);
   assert.equal((await bash('hadoop fs -rm /data'))?.block, true);
   assert.equal(reviews(), beforeYolo + 1);
   assert.equal(dialogs.length, dialogCount);
