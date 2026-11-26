@@ -5,10 +5,17 @@
   "keywords": ["pi-package", "pi-extension", "permissions"],
   "type": "module",
   "engines": { "node": ">=24" },
-  "files": ["index.mjs", "dist"],
+  "files": [
+    "index.mjs",
+    "dist",
+    "scripts/install-configs.mjs",
+    "examples/pi-permission-system.config.json",
+    "examples/pi-permission-auto-review.config.json"
+  ],
   "pi": { "extensions": ["./index.mjs"] },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "postinstall": "node scripts/install-configs.mjs",
     "prepack": "npm run build",
     "test": "npm run build && node --test tests/package.test.mjs"
   },

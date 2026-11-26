@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createReviewerProvider } from './reviewer-provider.mjs';
@@ -30,6 +31,17 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   const secondFixture = createReviewerProvider({ provider: 'offline-two' });
   const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
   const entry = process.env.PERMISSION_SYSTEM_TEST_ENTRY ?? fileURLToPath(new URL('../index.mjs', import.meta.url));
+  execFileSync(process.execPath, [join(dirname(entry), 'scripts/install-configs.mjs'), '--project'], { cwd, env: process.env });
+  const example = id => readFile(join(dirname(entry), 'examples', `${id}.config.json`));
+  const projectConfig = id => join(cwd, '.pi/extensions', id, 'config.json');
+  for (const id of ['pi-permission-system', 'pi-permission-auto-review']) {
+    assert.deepEqual(await readFile(projectConfig(id)), await example(id));
+    await assert.rejects(access(join(agentDir, 'extensions', id, 'config.json')), { code: 'ENOENT' });
+  }
+  const projectReviewer = projectConfig('pi-permission-auto-review');
+  const reviewerBytes = await readFile(projectReviewer);
+  const installedReviewer = JSON.parse(reviewerBytes);
+  assert.ok(!Object.hasOwn(installedReviewer, 'provider') && !Object.hasOwn(installedReviewer, 'model'));
   const start = async (project = cwd, projectTrusted = true) => {
     const settings = project === cwd && projectTrusted ? settingsManager : SettingsManager.inMemory({}, { projectTrusted });
     const resourceLoader = new DefaultResourceLoader({ cwd: project, agentDir, settingsManager: settings,
@@ -155,7 +167,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   assert.equal((await bash('hadoop fs -rm /data'))?.block, true);
   assert.equal(dialogs.length, count + 2);
   assert.equal(fixture.state.callCount, before, 'manual mode never calls the reviewer');
-  assert.deepEqual(await readdir(cwd), ['alias'], 'activation and off leave no project config');
+  assert.deepEqual((await readdir(cwd)).sort(), ['.pi', 'alias']);
   await session.reload();
   assert.equal((await write('report.txt'))?.block, undefined);
   assert.equal(fixture.state.callCount, before + 1, 'reload restores automatic review');
@@ -173,9 +185,9 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   const reviewerConfig = join(agentDir, 'extensions/pi-permission-auto-review');
   await assert.rejects(access(join(reviewerConfig, 'config.json')), { code: 'ENOENT' },
     'selecting a session model does not write reviewer settings');
-  const projectReviewerConfig = join(cwd, '.pi/extensions/pi-permission-auto-review');
+  assert.deepEqual(await readFile(projectReviewer), reviewerBytes, 'switching models leaves the installed config unchanged');
+  await rm(projectReviewer);
   await mkdir(reviewerConfig, { recursive: true });
-  await mkdir(projectReviewerConfig, { recursive: true });
   await writeFile(join(reviewerConfig, 'config.json'), JSON.stringify({ provider: 'offline-one' }));
   await session.reload();
   const beforeProviderOverride = fixture.state.callCount;
@@ -184,7 +196,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   assert.deepEqual(fixture.state.models.at(-1), { provider: 'offline-one', id: 'model-two' },
     'a provider override inherits the current session model ID');
 
-  await writeFile(join(projectReviewerConfig, 'config.json'), JSON.stringify({ model: 'model-one' }));
+  await writeFile(projectReviewer, JSON.stringify({ model: 'model-one' }));
   await session.reload();
   const beforeProjectOverride = fixture.state.callCount;
   assert.equal((await write('project-override.txt'))?.block, undefined);
@@ -206,7 +218,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   assert.equal((await write('manual-after-switch.txt'))?.block, true);
   assert.equal(fixture.state.callCount + secondFixture.state.callCount, manualCalls,
     'manual mode remains in force after model selection and config overrides');
-  await rm(join(projectReviewerConfig, 'config.json'));
+  await rm(projectReviewer);
   answer = 'y';
 
   const headless = await start();

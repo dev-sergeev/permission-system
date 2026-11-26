@@ -18,8 +18,6 @@ export default async function buildReviewer(outDir) {
   const manifest = JSON.parse(await readFile(join(dirname(dirname(entry)), "package.json"), "utf8"));
   if (manifest.version !== "1.0.2") throw new Error(`Unsupported reviewer version: ${manifest.version}`);
   const defaults = JSON.parse(await readFile(join(root, "examples/pi-permission-auto-review.config.json"), "utf8"));
-  delete defaults.provider;
-  delete defaults.model;
   let source = await readFile(entry, "utf8");
   const patch = (from, to) => { source = replaceOnce(source, from, to); };
 
