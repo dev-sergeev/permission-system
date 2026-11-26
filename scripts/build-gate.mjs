@@ -25,10 +25,7 @@ export default async function buildGate(outDir) {
   const defaults = JSON.parse(readFileSync(join(root, "examples/pi-permission-system.config.json"), "utf8"));
   const planDraftPattern = "*/pi-plan-mode/drafts/????????-????-????-????-????????????/plan.md";
   defaults.permission.path_write[planDraftPattern] = "allow";
-  defaults.permission.external_directory_write = {
-    "*": defaults.permission.external_directory_write,
-    [planDraftPattern]: "allow",
-  };
+  defaults.permission.external_directory_write[planDraftPattern] = "allow";
   const patches = new Map([
     [join(src, "policy/rule.ts"), [
       ["import { PATH_SURFACES }", `import { getAgentDir } from "@earendil-works/pi-coding-agent";
