@@ -28,7 +28,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   t.mock.method(globalThis, 'fetch', () => { throw new Error('External network disabled in contract test'); });
   const { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, initTheme } = await import('@earendil-works/pi-coding-agent');
   const fixture = createReviewerProvider();
-  const secondFixture = createReviewerProvider({ provider: 'offline-two' });
+  const secondFixture = createReviewerProvider('offline-two');
   const settingsManager = SettingsManager.inMemory({}, { projectTrusted: true });
   const entry = process.env.PERMISSION_SYSTEM_TEST_ENTRY ?? fileURLToPath(new URL('../index.mjs', import.meta.url));
   execFileSync(process.execPath, [join(dirname(entry), 'scripts/install-configs.mjs'), '--project'], { cwd, env: process.env });
@@ -237,13 +237,11 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
     'an unavailable override does not silently use the session model');
 
   const gateConfigDir = join(agentDir, 'extensions/pi-permission-system');
-  const projectGateConfigDir = join(cwd, '.pi/extensions/pi-permission-system');
   const globalGateConfig = join(gateConfigDir, 'config.json');
-  const projectGateConfig = join(projectGateConfigDir, 'config.json');
+  const projectGateConfig = projectConfig('pi-permission-system');
   const globalJson = '{"yoloMode":true}';
   const projectJson = '{"yoloMode":false,"permission":{"write":"ask"}}';
   await mkdir(gateConfigDir, { recursive: true });
-  await mkdir(projectGateConfigDir, { recursive: true });
   await writeFile(globalGateConfig, globalJson);
   await writeFile(projectGateConfig, projectJson);
   await rm(join(reviewerConfig, 'config.json'));

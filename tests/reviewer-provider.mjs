@@ -1,6 +1,6 @@
 import { fauxAssistantMessage, fauxProvider, getCurrentSystemPrompt } from '@earendil-works/pi-ai';
 
-export function createReviewerProvider({ provider: providerId = 'offline-one', verdict = 'allow', delay } = {}) {
+export function createReviewerProvider(providerId = 'offline-one') {
   const faux = fauxProvider({
     provider: providerId,
     api: `${providerId}-api`,
@@ -8,16 +8,14 @@ export function createReviewerProvider({ provider: providerId = 'offline-one', v
     tokenSize: { min: 1000, max: 1000 },
   });
   const state = { systemPrompts: [], models: [], get callCount() { return faux.state.callCount; } };
+  let verdict = 'allow';
   function setVerdict(value) {
     if (value !== 'allow' && value !== 'deny') throw new Error(`Unknown reviewer verdict: ${value}`);
     verdict = value;
   }
-  setVerdict(verdict);
-  const respond = async (context) => {
+  const respond = context => {
     state.systemPrompts.push(getCurrentSystemPrompt(context.messages));
-    const outcome = verdict;
-    await delay;
-    return fauxAssistantMessage(JSON.stringify({ outcome, rationale: `Offline reviewer: ${outcome}.` }));
+    return fauxAssistantMessage(JSON.stringify({ outcome: verdict, rationale: `Offline reviewer: ${verdict}.` }));
   };
   const provider = {
     ...faux.provider,
