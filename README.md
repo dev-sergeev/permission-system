@@ -7,12 +7,12 @@
 После публикации выполните из корня целевого проекта:
 
 ```sh
-pi install -l npm:permission-system@1.0.3
+pi install -l npm:permission-system@1.0.4
 ```
 
 При разрешённом `postinstall` команда с `-l` создаёт только отсутствующие `config.json` в `.pi/extensions/pi-permission-system/` и `.pi/extensions/pi-permission-auto-review/` проекта. Без `-l` те же файлы создаются в `<agentDir>/extensions/`, где `<agentDir>` — `PI_CODING_AGENT_DIR` или, по умолчанию, `~/.pi/agent`. Установка и обновление не заменяют существующие файлы и не сливают их с примерами. Локальная установка не меняет глобальные файлы, но в доверенном проекте правила из скопированных примеров имеют приоритет над глобальными.
 
-В npm 12 для автоматического копирования разрешите **точную версию** в `allowScripts` перед установкой: добавьте `"permission-system@1.0.3": true` в этот объект в `<проект>/.pi/npm/package.json` для `-l` или в `<agentDir>/npm/package.json` для глобальной установки. Если скрипт не разрешён или указан `--ignore-scripts`, пакет не обходит запрет. Временный npm-префикс Pi и обычная установка вне префиксов Pi конфиги не создают.
+В npm 12 для автоматического копирования разрешите **точную версию** в `allowScripts` перед установкой: добавьте `"permission-system@1.0.4": true` в этот объект в `<проект>/.pi/npm/package.json` для `-l` или в `<agentDir>/npm/package.json` для глобальной установки. Если скрипт не разрешён или указан `--ignore-scripts`, пакет не обходит запрет. Временный npm-префикс Pi и обычная установка вне префиксов Pi конфиги не создают.
 
 Без lifecycle-скриптов конфиги можно установить явно. Из корня проекта для локального npm-пакета выполните:
 
@@ -72,4 +72,4 @@ npm test
 npm pack
 ```
 
-Сборка включает код `@gotgenes/pi-permission-system@42.1.0` и `@mzwing/pi-permission-auto-review@1.0.2`, правила из `examples/*.config.json` и лицензии upstream. Тесты не требуют аккаунта LLM или кластера Hadoop. Для публикации проверенного архива: `npm publish ./permission-system-1.0.3.tgz --tag latest`.
+Сборка включает код `@gotgenes/pi-permission-system@42.1.0` и `@mzwing/pi-permission-auto-review@1.0.2`, правила из `examples/*.config.json` и лицензии upstream. Тесты не требуют аккаунта LLM или кластера Hadoop. Для публикации проверенного архива: `npm publish ./permission-system-1.0.4.tgz --tag latest`.
