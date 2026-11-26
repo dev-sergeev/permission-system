@@ -19,8 +19,8 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
     await rm(root, { recursive: true, force: true });
   });
   const cwd = join(root, 'project');
-  const agentDir = join(root, 'agent');
-  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const agentDir = join(root, '.pi', 'agent');
+  await Promise.all([mkdir(cwd), mkdir(agentDir, { recursive: true })]);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   process.env.PI_OFFLINE = '1';
   process.env.PI_TELEMETRY = 'off';
@@ -47,6 +47,10 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
     return session;
   };
   const session = await start();
+  const uuid = '39969cbd-ae47-4959-9c7b-7fdbd6db8f90';
+  const draftDir = join(agentDir, 'pi-plan-mode', 'drafts', uuid);
+  const draft = join(draftDir, 'plan.md');
+  await mkdir(draftDir, { recursive: true, mode: 0o700 });
   initTheme('dark');
   const theme = session.extensionRunner.createCommandContext().ui.theme;
   const dialogs = [];
@@ -111,9 +115,35 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   const outside = join(root, 'outside.txt');
   await writeFile(outside, 'external');
   await symlink(outside, join(cwd, 'alias'));
-  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, true);
-  assert.match(dialogs.at(-1), /outside\.txt/);
+  const externalDialogs = dialogs.length;
+  assert.equal((await call(session, 'read', { path: outside }))?.block, undefined);
+  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, undefined);
+  assert.equal(dialogs.length, externalDialogs, 'external reads do not prompt');
   assert.equal((await write('alias'))?.block, true, 'model approval cannot replace external write consent');
+  assert.equal(dialogs.length, externalDialogs + 1);
+  assert.match(dialogs.at(-1), /external_directory_write/);
+  assert.match(dialogs.at(-1), /outside\.txt/);
+
+  const draftDialogs = dialogs.length;
+  const draftReviews = fixture.state.callCount;
+  assert.equal((await write(draft))?.block, undefined);
+  assert.equal(dialogs.length, draftDialogs);
+  assert.equal(fixture.state.callCount, draftReviews + 1, 'draft write still requires model review');
+  await writeFile(draft, 'draft');
+  assert.equal((await call(session, 'edit', { path: draft, edits: [{ oldText: 'draft', newText: 'revised' }] }))?.block, undefined);
+  assert.equal(dialogs.length, draftDialogs);
+  assert.equal(fixture.state.callCount, draftReviews + 2, 'draft edit still requires model review');
+  await rm(draft);
+  await symlink(outside, draft);
+  assert.equal((await write(draft))?.block, true, 'a symlinked draft remains protected by the .pi deny');
+  assert.equal((await write(join(draftDir, 'notes.md')))?.block, true, 'other .pi files remain denied');
+  assert.equal(dialogs.length, draftDialogs);
+  assert.equal(await readFile(outside, 'utf8'), 'external');
+  const decoyDir = join(root, 'decoy', 'pi-plan-mode', 'drafts', uuid);
+  await mkdir(decoyDir, { recursive: true });
+  assert.equal((await write(join(decoyDir, 'plan.md')))?.block, true, 'a matching external decoy requires consent');
+  assert.equal(dialogs.length, draftDialogs + 1);
+  assert.match(dialogs.at(-1), /external_directory_write/);
 
   await session.prompt('/permission-auto-review off');
   const before = fixture.state.callCount;
@@ -181,7 +211,7 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
 
   const headless = await start();
   await headless.bindExtensions({ mode: 'print' });
-  const result = await headless.extensionRunner.emitToolCall({ type: 'tool_call', toolName: 'read', input: { path: 'alias' }, toolCallId: 'headless-external' });
+  const result = await headless.extensionRunner.emitToolCall({ type: 'tool_call', toolName: 'write', input: { path: 'alias', content: 'x' }, toolCallId: 'headless-external' });
   assert.equal(result?.block, true, 'without a human an external-path ask fails closed');
 
   await writeFile(join(reviewerConfig, 'config.json'), JSON.stringify({ provider: 'not-installed' }));
@@ -278,9 +308,8 @@ test('data-ops policy, session review mode and trusted project YOLO', { timeout:
   assert.equal((await write('report.txt'))?.block, true);
   assert.equal(reviews(), beforeYolo + 2);
   assert.equal(dialogs.length, dialogCount);
-  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, true);
-  assert.equal(dialogs.length, dialogCount + 1);
-  assert.match(dialogs.at(-1), /outside\.txt/);
+  assert.equal((await call(session, 'read', { path: 'alias' }))?.block, undefined);
+  assert.equal(dialogs.length, dialogCount);
   assert.equal(reviews(), beforeYolo + 2);
 
   await session.prompt('/permission-system');

@@ -23,7 +23,38 @@ export default async function buildGate(outDir) {
     throw new Error(`Expected pi-permission-system 42.1.0, got ${manifest.version}`);
   }
   const defaults = JSON.parse(readFileSync(join(root, "examples/pi-permission-system.config.json"), "utf8"));
+  const planDraftPattern = "*/pi-plan-mode/drafts/????????-????-????-????-????????????/plan.md";
+  defaults.permission.path_write[planDraftPattern] = "allow";
+  defaults.permission.external_directory_write = {
+    "*": defaults.permission.external_directory_write,
+    [planDraftPattern]: "allow",
+  };
   const patches = new Map([
+    [join(src, "policy/rule.ts"), [
+      ["import { PATH_SURFACES }", `import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { lstatSync } from "node:fs";
+import { PATH_SURFACES }`],
+      ["function ruleMatches(", `function isManagedPlanDraft(value: string, flavor: PathFlavor): boolean {
+  const { isAbsolute, dirname, basename, join } = flavor.impl;
+  if (!isAbsolute(value) || basename(value) !== "plan.md") return false;
+  const parent = dirname(value);
+  const uuid = basename(parent);
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(uuid)) return false;
+  try {
+    const expected = join(flavor.realpath(getAgentDir()), "pi-plan-mode", "drafts", uuid);
+    if (flavor.fold(flavor.realpath(parent)) !== flavor.fold(expected) || !lstatSync(parent).isDirectory()) return false;
+    const stat = lstatSync(value, { throwIfNoEntry: false });
+    return stat === undefined || (stat.isFile() && stat.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+function ruleMatches(`],
+      ["wildcardMatch(rule.pattern, value, matchOptions)", `wildcardMatch(rule.pattern, value, matchOptions) &&
+    (rule.action !== "allow" || rule.pattern !== ${JSON.stringify(planDraftPattern)} ||
+      (surface !== "path_write" && surface !== "external_directory_write") || isManagedPlanDraft(value, flavor))`],
+    ]],
     [join(src, "config/config-loader.ts"), [
       ["let merged: UnifiedPermissionConfig = {};", `let merged: UnifiedPermissionConfig = ${JSON.stringify(defaults)};`],
       ["  return {\n    global: globalConfig,", "  // Only the trusted project marker can opt in; ignore legacy JSON values.\n  merged.yoloMode = false;\n  merged.authorizerChain = [\"auto-review\"];\n\n  return {\n    global: globalConfig,"],
